@@ -1,0 +1,76 @@
+{
+  "name": "dlt-sql-indexer",
+  "displayName": "DLT SQL Indexer",
+  "description": "Index and navigate Databricks DLT SQL models — go-to-definition, autocomplete, hover info, and dependency tree.",
+  "version": "0.1.0",
+  "publisher": "clara-team",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/models/**/*.sql"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dltSqlIndexer.rebuildIndex",
+        "title": "DLT: Rebuild Model Index"
+      },
+      {
+        "command": "dltSqlIndexer.showDependencyGraph",
+        "title": "DLT: Show Model Dependencies"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "dltModelTree",
+          "name": "DLT Models",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DLT SQL Indexer",
+      "properties": {
+        "dltSqlIndexer.modelsPath": {
+          "type": "string",
+          "default": "models",
+          "description": "Relative path to the models directory"
+        },
+        "dltSqlIndexer.excludePatterns": {
+          "type": "array",
+          "default": [],
+          "description": "Glob patterns to exclude from indexing"
+        },
+        "dltSqlIndexer.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable column validation diagnostics (warning squiggles)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.18.0",
+    "@typescript-eslint/parser": "^6.18.0"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4"
+  }
+}

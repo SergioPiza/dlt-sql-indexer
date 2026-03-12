@@ -5,7 +5,8 @@ import type { ResolvedColumn, FromSource } from "../schema/types";
 
 type HoverTarget =
   | { kind: "model"; name: string }
-  | { kind: "cte"; name: string };
+  | { kind: "cte"; name: string }
+  | { kind: "alias"; name: string };
 
 /**
  * Show rich hover info when hovering over model references.
@@ -28,16 +29,42 @@ export class DltHoverProvider implements vscode.HoverProvider {
       return new vscode.Hover(this.buildHoverContent(model));
     }
 
-    // CTE hover — find the containing model and look up resolved CTE columns + sources
     const model = this.indexer.getModelByFile(document.uri.fsPath);
     if (!model) return undefined;
 
-    const key = target.name.toLowerCase();
-    const cteColumns = model.resolvedCteColumns?.get(key);
-    const cteSources = model.resolvedCteSources?.get(key);
-    return new vscode.Hover(
-      this.buildCteHoverContent(target.name, cteColumns, cteSources)
-    );
+    if (target.kind === "cte") {
+      // CTE hover — look up resolved CTE columns + sources
+      const key = target.name.toLowerCase();
+      const cteColumns = model.resolvedCteColumns?.get(key);
+      const cteSources = model.resolvedCteSources?.get(key);
+      return new vscode.Hover(
+        this.buildCteHoverContent(target.name, cteColumns, cteSources)
+      );
+    }
+
+    // Alias hover — resolve alias to its source model or CTE
+    const src = model.aliasToSource?.get(target.name.toLowerCase());
+    if (!src) return undefined;
+
+    if (src.isLiveRef || src.isDbtRef) {
+      // Alias points to a model
+      const sourceModel = this.indexer.getModel(src.sourceName);
+      if (sourceModel) {
+        return new vscode.Hover(this.buildHoverContent(sourceModel));
+      }
+    }
+
+    // Alias points to a CTE
+    const cteKey = src.sourceName.toLowerCase();
+    const cteColumns = model.resolvedCteColumns?.get(cteKey);
+    const cteSources = model.resolvedCteSources?.get(cteKey);
+    if (cteColumns || cteSources) {
+      return new vscode.Hover(
+        this.buildCteHoverContent(src.sourceName, cteColumns, cteSources)
+      );
+    }
+
+    return undefined;
   }
 
   private buildHoverContent(model: IndexedModel): vscode.MarkdownString {
@@ -242,26 +269,33 @@ export class DltHoverProvider implements vscode.HoverProvider {
       }
     }
 
-    // CTE declaration or reference — check if the word under cursor is a known CTE
+    // CTE declaration/reference or alias — check the word under cursor
     const model = this.indexer.getModelByFile(document.uri.fsPath);
+    const wordRange = document.getWordRangeAtPosition(position, /\w+/);
+    if (!wordRange) return undefined;
+
+    const word = document.getText(wordRange);
+    const charBefore =
+      wordRange.start.character > 0
+        ? line[wordRange.start.character - 1]
+        : "";
+
+    // Skip if preceded by a dot (e.g., LIVE.xxx — already handled above)
+    if (charBefore === ".") return undefined;
+
+    // Check if it's a known CTE name
     if (model?.ctes && model.ctes.length > 0) {
-      const wordRange = document.getWordRangeAtPosition(position, /\w+/);
-      if (wordRange) {
-        const word = document.getText(wordRange);
-        const isCte = model.ctes.some(
-          (c) => c.name.toLowerCase() === word.toLowerCase()
-        );
-        if (isCte) {
-          // Make sure we're not matching a SQL keyword or a LIVE. prefix
-          const charBefore =
-            wordRange.start.character > 0
-              ? line[wordRange.start.character - 1]
-              : "";
-          if (charBefore !== ".") {
-            return { kind: "cte", name: word };
-          }
-        }
+      const isCte = model.ctes.some(
+        (c) => c.name.toLowerCase() === word.toLowerCase()
+      );
+      if (isCte) {
+        return { kind: "cte", name: word };
       }
+    }
+
+    // Check if it's a known alias (e.g., "m" in "FROM LIVE.model AS m" or "m.col")
+    if (model?.aliasToSource?.has(word.toLowerCase())) {
+      return { kind: "alias", name: word };
     }
 
     return undefined;

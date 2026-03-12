@@ -89,6 +89,8 @@ export interface IndexedModel {
   resolvedCteColumns?: Map<string, ResolvedColumn[]>;
   /** Per-CTE sources (populated by SchemaResolver) — keyed by CTE name (lowercase) */
   resolvedCteSources?: Map<string, import("./schema/types").FromSource[]>;
+  /** Alias → source name mapping from all FROM/JOIN clauses (populated by SchemaResolver) */
+  aliasToSource?: Map<string, import("./schema/types").FromSource>;
   /** Raw CTE blocks for schema resolution (populated by parser) */
   rawCteBlocks?: RawCteBlock[];
   /** Raw final SELECT body for schema resolution (populated by parser) */

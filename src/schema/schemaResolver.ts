@@ -119,14 +119,34 @@ export class SchemaResolver {
       }
     }
 
+    // Build alias → source mapping from all FROM/JOIN clauses
+    const aliasToSource = new Map<string, FromSource>();
+    for (const [, scope] of cteScopes) {
+      for (const src of scope.sources) {
+        if (src.alias.toLowerCase() !== src.sourceName.toLowerCase()) {
+          aliasToSource.set(src.alias.toLowerCase(), src);
+        }
+      }
+    }
+
     // Resolve the final SELECT body
     if (model.rawSelectBody) {
+      const finalSources = parseFromClause(model.rawSelectBody);
+      for (const src of finalSources) {
+        if (src.alias.toLowerCase() !== src.sourceName.toLowerCase()) {
+          aliasToSource.set(src.alias.toLowerCase(), src);
+        }
+      }
       const finalColumns = this.resolveSelectBody(
         model.rawSelectBody,
         model,
         cteScopes
       );
       model.resolvedColumns = finalColumns;
+    }
+
+    if (aliasToSource.size > 0) {
+      model.aliasToSource = aliasToSource;
     }
 
     // Ensure all final columns have a source (default to this model's name).

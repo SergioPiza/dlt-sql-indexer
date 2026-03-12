@@ -67,6 +67,11 @@ export class DltHoverProvider implements vscode.HoverProvider {
     return undefined;
   }
 
+  /** Escape text for use inside a markdown table cell */
+  private escapeTableCell(text: string): string {
+    return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  }
+
   private buildHoverContent(model: IndexedModel): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
@@ -89,16 +94,15 @@ export class DltHoverProvider implements vscode.HoverProvider {
       md.appendMarkdown(`${model.yml.description}\n\n`);
     }
 
-    // Metadata table
-    md.appendMarkdown(`| | |\n|---|---|\n`);
-    md.appendMarkdown(`| **Layer** | ${model.layer} |\n`);
-    md.appendMarkdown(`| **Type** | ${model.kind.replace(/_/g, " ")} |\n`);
+    // Metadata table — build as a single string so markdown parser sees one table
+    let metaTable = `| | |\n|---|---|\n`;
+    metaTable += `| **Layer** | ${model.layer} |\n`;
+    metaTable += `| **Type** | ${model.kind.replace(/_/g, " ")} |\n`;
     if (model.country) {
-      md.appendMarkdown(
-        `| **Country** | ${model.country.toUpperCase()} |\n`
-      );
+      metaTable += `| **Country** | ${model.country.toUpperCase()} |\n`;
     }
-    md.appendMarkdown(`| **Path** | \`${model.relativePath}\` |\n\n`);
+    metaTable += `| **Path** | \`${model.relativePath}\` |\n`;
+    md.appendMarkdown(metaTable + `\n`);
 
     // Columns — prefer resolvedColumns (schema propagation), fall back to explicit columns
     const displayColumns = model.resolvedColumns || (model.columns.length > 0 ? model.columns : undefined);
@@ -107,25 +111,32 @@ export class DltHoverProvider implements vscode.HoverProvider {
       md.appendMarkdown(
         `**Columns** (${displayColumns.length}${isResolved ? ", resolved" : ""}):\n\n`
       );
-      md.appendMarkdown(`| Column | Type | Info |\n|---|---|---|\n`);
+      // Only show Info column when there's actual data in it
+      const hasInfo = displayColumns.slice(0, 20).some(
+        (col) => ("comment" in col ? (col as any).comment : "")
+      );
+      // Build columns table as a single string
+      let colTable = hasInfo
+        ? `| Column | Type | Info |\n|:--|:--|:--|\n`
+        : `| Column | Type |\n|:--|:--|\n`;
       for (const col of displayColumns.slice(0, 20)) {
         const typeStr = col.dataType || "-";
-        // Show confidence badge for resolved columns
         const confidence =
           "confidence" in col
             ? (col as any).confidence === "known"
               ? ""
               : (col as any).confidence === "inferred"
-                ? " *"
+                ? " \\*"
                 : " ?"
             : "";
-        const desc = ("comment" in col ? (col as any).comment : "") || "";
-        const truncDesc =
-          desc.length > 50 ? desc.substring(0, 47) + "..." : desc;
-        md.appendMarkdown(
-          `| \`${col.name}\` | ${typeStr}${confidence} | ${truncDesc} |\n`
-        );
+        if (hasInfo) {
+          const desc = this.escapeTableCell(("comment" in col ? (col as any).comment : "") || "");
+          colTable += `| \`${col.name}\` | ${typeStr}${confidence} | ${desc} |\n`;
+        } else {
+          colTable += `| \`${col.name}\` | ${typeStr}${confidence} |\n`;
+        }
       }
+      md.appendMarkdown(colTable);
       if (displayColumns.length > 20) {
         md.appendMarkdown(
           `\n*... and ${displayColumns.length - 20} more columns*\n\n`
@@ -179,22 +190,26 @@ export class DltHoverProvider implements vscode.HoverProvider {
       md.appendMarkdown(
         `**Columns** (${columns.length}):\n\n`
       );
-      md.appendMarkdown(`| Column | Type | Info |\n|---|---|---|\n`);
+      const hasInfo = columns.slice(0, 20).some((col) => col.comment);
+      let colTable = hasInfo
+        ? `| Column | Type | Info |\n|:--|:--|:--|\n`
+        : `| Column | Type |\n|:--|:--|\n`;
       for (const col of columns.slice(0, 20)) {
         const typeStr = col.dataType || "-";
         const confidence =
           col.confidence === "known"
             ? ""
             : col.confidence === "inferred"
-              ? " *"
+              ? " \\*"
               : " ?";
-        const desc = col.comment || "";
-        const truncDesc =
-          desc.length > 50 ? desc.substring(0, 47) + "..." : desc;
-        md.appendMarkdown(
-          `| \`${col.name}\` | ${typeStr}${confidence} | ${truncDesc} |\n`
-        );
+        if (hasInfo) {
+          const desc = this.escapeTableCell(col.comment || "");
+          colTable += `| \`${col.name}\` | ${typeStr}${confidence} | ${desc} |\n`;
+        } else {
+          colTable += `| \`${col.name}\` | ${typeStr}${confidence} |\n`;
+        }
       }
+      md.appendMarkdown(colTable);
       if (columns.length > 20) {
         md.appendMarkdown(
           `\n*... and ${columns.length - 20} more columns*\n\n`

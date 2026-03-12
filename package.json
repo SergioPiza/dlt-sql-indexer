@@ -2,7 +2,7 @@
   "name": "dlt-sql-indexer",
   "displayName": "DLT SQL Indexer",
   "description": "Index and navigate Databricks DLT SQL models — go-to-definition, autocomplete, hover info, and dependency tree.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "SergioPiza",
   "license": "MIT",
   "repository": {

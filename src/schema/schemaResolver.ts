@@ -119,23 +119,16 @@ export class SchemaResolver {
       }
     }
 
-    // Build alias → source mapping from all FROM/JOIN clauses
+    // Build alias → source mapping from the final SELECT body only.
+    // CTE-internal aliases are scoped to their CTE and shouldn't leak
+    // into the global map (multiple CTEs often reuse the same alias letter).
     const aliasToSource = new Map<string, FromSource>();
-    for (const [, scope] of cteScopes) {
-      for (const src of scope.sources) {
-        if (src.alias.toLowerCase() !== src.sourceName.toLowerCase()) {
-          aliasToSource.set(src.alias.toLowerCase(), src);
-        }
-      }
-    }
 
     // Resolve the final SELECT body
     if (model.rawSelectBody) {
       const finalSources = parseFromClause(model.rawSelectBody);
       for (const src of finalSources) {
-        if (src.alias.toLowerCase() !== src.sourceName.toLowerCase()) {
-          aliasToSource.set(src.alias.toLowerCase(), src);
-        }
+        aliasToSource.set(src.alias.toLowerCase(), src);
       }
       const finalColumns = this.resolveSelectBody(
         model.rawSelectBody,

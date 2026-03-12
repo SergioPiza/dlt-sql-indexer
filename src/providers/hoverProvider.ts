@@ -42,8 +42,21 @@ export class DltHoverProvider implements vscode.HoverProvider {
       );
     }
 
-    // Alias hover — resolve alias to its source model or CTE
-    const src = model.aliasToSource?.get(target.name.toLowerCase());
+    // Alias hover — check final SELECT aliases first, then CTE-scoped aliases
+    let src = model.aliasToSource?.get(target.name.toLowerCase());
+
+    // If not in the final SELECT aliases, search CTE-scoped sources
+    if (!src && model.resolvedCteSources) {
+      for (const [, sources] of model.resolvedCteSources) {
+        const match = sources.find(
+          (s) => s.alias.toLowerCase() === target.name.toLowerCase()
+        );
+        if (match) {
+          src = match;
+          break;
+        }
+      }
+    }
     if (!src) return undefined;
 
     if (src.isLiveRef || src.isDbtRef) {
@@ -308,9 +321,17 @@ export class DltHoverProvider implements vscode.HoverProvider {
       }
     }
 
-    // Check if it's a known alias (e.g., "m" in "FROM LIVE.model AS m" or "m.col")
-    if (model?.aliasToSource?.has(word.toLowerCase())) {
+    // Check if it's a known alias — final SELECT aliases or CTE-scoped aliases
+    const wordLower = word.toLowerCase();
+    if (model?.aliasToSource?.has(wordLower)) {
       return { kind: "alias", name: word };
+    }
+    if (model?.resolvedCteSources) {
+      for (const [, sources] of model.resolvedCteSources) {
+        if (sources.some((s) => s.alias.toLowerCase() === wordLower)) {
+          return { kind: "alias", name: word };
+        }
+      }
     }
 
     return undefined;

@@ -87,6 +87,8 @@ export interface IndexedModel {
   resolutionStatus?: "pending" | "resolving" | "resolved" | "error";
   /** Per-CTE resolved columns (populated by SchemaResolver) — keyed by CTE name (lowercase) */
   resolvedCteColumns?: Map<string, ResolvedColumn[]>;
+  /** Per-CTE sources (populated by SchemaResolver) — keyed by CTE name (lowercase) */
+  resolvedCteSources?: Map<string, import("./schema/types").FromSource[]>;
   /** Raw CTE blocks for schema resolution (populated by parser) */
   rawCteBlocks?: RawCteBlock[];
   /** Raw final SELECT body for schema resolution (populated by parser) */

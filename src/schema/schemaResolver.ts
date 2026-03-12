@@ -109,11 +109,13 @@ export class SchemaResolver {
       }
     }
 
-    // Store per-CTE resolved columns on the model for diagnostics
+    // Store per-CTE resolved columns and sources on the model
     if (cteScopes.size > 0) {
       model.resolvedCteColumns = new Map();
+      model.resolvedCteSources = new Map();
       for (const [cteName, scope] of cteScopes) {
         model.resolvedCteColumns.set(cteName, scope.columns);
+        model.resolvedCteSources.set(cteName, scope.sources);
       }
     }
 

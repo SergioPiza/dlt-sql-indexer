@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 import { DltModelIndexer } from "../indexer";
 import { IndexedModel } from "../types";
+import type { ResolvedColumn, FromSource } from "../schema/types";
+
+type HoverTarget =
+  | { kind: "model"; name: string }
+  | { kind: "cte"; name: string };
 
 /**
  * Show rich hover info when hovering over model references.
@@ -14,14 +19,25 @@ export class DltHoverProvider implements vscode.HoverProvider {
     position: vscode.Position,
     _token: vscode.CancellationToken
   ): vscode.Hover | undefined {
-    const modelName = this.extractModelName(document, position);
-    if (!modelName) return undefined;
+    const target = this.extractHoverTarget(document, position);
+    if (!target) return undefined;
 
-    const model = this.indexer.getModel(modelName);
+    if (target.kind === "model") {
+      const model = this.indexer.getModel(target.name);
+      if (!model) return undefined;
+      return new vscode.Hover(this.buildHoverContent(model));
+    }
+
+    // CTE hover — find the containing model and look up resolved CTE columns + sources
+    const model = this.indexer.getModelByFile(document.uri.fsPath);
     if (!model) return undefined;
 
-    const markdown = this.buildHoverContent(model);
-    return new vscode.Hover(markdown);
+    const key = target.name.toLowerCase();
+    const cteColumns = model.resolvedCteColumns?.get(key);
+    const cteSources = model.resolvedCteSources?.get(key);
+    return new vscode.Hover(
+      this.buildCteHoverContent(target.name, cteColumns, cteSources)
+    );
   }
 
   private buildHoverContent(model: IndexedModel): vscode.MarkdownString {
@@ -121,20 +137,76 @@ export class DltHoverProvider implements vscode.HoverProvider {
     return md;
   }
 
-  private extractModelName(
+  private buildCteHoverContent(
+    cteName: string,
+    columns?: ResolvedColumn[],
+    sources?: FromSource[]
+  ): vscode.MarkdownString {
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+    md.supportHtml = true;
+
+    md.appendMarkdown(`### $(symbol-structure) ${cteName} *(CTE)*\n\n`);
+
+    if (columns && columns.length > 0) {
+      md.appendMarkdown(
+        `**Columns** (${columns.length}):\n\n`
+      );
+      md.appendMarkdown(`| Column | Type | Info |\n|---|---|---|\n`);
+      for (const col of columns.slice(0, 20)) {
+        const typeStr = col.dataType || "-";
+        const confidence =
+          col.confidence === "known"
+            ? ""
+            : col.confidence === "inferred"
+              ? " *"
+              : " ?";
+        const desc = col.comment || "";
+        const truncDesc =
+          desc.length > 50 ? desc.substring(0, 47) + "..." : desc;
+        md.appendMarkdown(
+          `| \`${col.name}\` | ${typeStr}${confidence} | ${truncDesc} |\n`
+        );
+      }
+      if (columns.length > 20) {
+        md.appendMarkdown(
+          `\n*... and ${columns.length - 20} more columns*\n\n`
+        );
+      }
+      md.appendMarkdown(`\n*\\* = inferred type, ? = unknown type*\n\n`);
+    } else {
+      md.appendMarkdown(`*No resolved columns available*\n\n`);
+    }
+
+    // Sources (what this CTE reads from)
+    if (sources && sources.length > 0) {
+      md.appendMarkdown(`**Sources:**\n`);
+      for (const src of sources) {
+        if (src.isLiveRef || src.isDbtRef) {
+          md.appendMarkdown(`- $(link) ${src.sourceName}\n`);
+        } else {
+          md.appendMarkdown(`- $(symbol-structure) ${src.sourceName}\n`);
+        }
+      }
+    }
+
+    return md;
+  }
+
+  private extractHoverTarget(
     document: vscode.TextDocument,
     position: vscode.Position
-  ): string | undefined {
+  ): HoverTarget | undefined {
     const line = document.lineAt(position).text;
+    let match: RegExpExecArray | null;
 
     // LIVE.model_name
     const liveMatch = /\bLIVE\.(\w+)\b/g;
-    let match: RegExpExecArray | null;
     while ((match = liveMatch.exec(line)) !== null) {
       const start = match.index + "LIVE.".length;
       const end = start + match[1].length;
       if (position.character >= start && position.character <= end) {
-        return match[1];
+        return { kind: "model", name: match[1] };
       }
     }
 
@@ -144,7 +216,7 @@ export class DltHoverProvider implements vscode.HoverProvider {
       const tableStart = match.index + match[0].length - match[2].length;
       const tableEnd = tableStart + match[2].length;
       if (position.character >= tableStart && position.character <= tableEnd) {
-        return match[2];
+        return { kind: "model", name: match[2] };
       }
     }
 
@@ -154,7 +226,41 @@ export class DltHoverProvider implements vscode.HoverProvider {
       const nameStart = line.indexOf(match[1], match.index);
       const nameEnd = nameStart + match[1].length;
       if (position.character >= nameStart && position.character <= nameEnd) {
-        return match[1];
+        return { kind: "model", name: match[1] };
+      }
+    }
+
+    // Model name declaration: CREATE ... LIVE TABLE/VIEW model_name
+    // or CREATE ... MATERIALIZED VIEW model_name
+    const createMatch =
+      /\bCREATE\b.*?\b(?:LIVE\s+(?:TABLE|VIEW)|MATERIALIZED\s+VIEW|STREAMING\s+TABLE)\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\b/gi;
+    while ((match = createMatch.exec(line)) !== null) {
+      const nameStart = match.index + match[0].length - match[1].length;
+      const nameEnd = nameStart + match[1].length;
+      if (position.character >= nameStart && position.character <= nameEnd) {
+        return { kind: "model", name: match[1] };
+      }
+    }
+
+    // CTE declaration or reference — check if the word under cursor is a known CTE
+    const model = this.indexer.getModelByFile(document.uri.fsPath);
+    if (model?.ctes && model.ctes.length > 0) {
+      const wordRange = document.getWordRangeAtPosition(position, /\w+/);
+      if (wordRange) {
+        const word = document.getText(wordRange);
+        const isCte = model.ctes.some(
+          (c) => c.name.toLowerCase() === word.toLowerCase()
+        );
+        if (isCte) {
+          // Make sure we're not matching a SQL keyword or a LIVE. prefix
+          const charBefore =
+            wordRange.start.character > 0
+              ? line[wordRange.start.character - 1]
+              : "";
+          if (charBefore !== ".") {
+            return { kind: "cte", name: word };
+          }
+        }
       }
     }
 

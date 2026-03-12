@@ -63,22 +63,19 @@ export class DltModelIndexer {
     // Build reverse reference index
     this.buildReverseIndex();
 
-    // Resolve column schemas through the dependency chain
-    this.resolveSchemas();
-
     const elapsed = Date.now() - startTime;
     this.outputChannel.appendLine(
       `Indexed ${this.index.models.size} models from ${sqlFiles.length} SQL files and ${ymlFiles.length} YML files in ${elapsed}ms`
     );
   }
 
-  /** Resolve column schemas for all models in topological order */
-  private resolveSchemas(): void {
+  /** Resolve column schemas for all models in topological order (async, non-blocking) */
+  async resolveSchemas(): Promise<void> {
     const resolver = new SchemaResolver(
       (name) => this.getModel(name),
       (msg) => this.outputChannel.appendLine(`[Schema] ${msg}`)
     );
-    resolver.resolveAll(this.getAllModels());
+    await resolver.resolveAll(this.getAllModels());
   }
 
   /** Index a single SQL file */
@@ -205,13 +202,13 @@ export class DltModelIndexer {
       this.outputChannel.appendLine(`File changed: ${uri.fsPath}`);
       await this.indexSqlFile(uri);
       this.buildReverseIndex();
-      this.resolveSchemas();
+      await this.resolveSchemas();
     });
     this.watcher.onDidCreate(async (uri) => {
       this.outputChannel.appendLine(`File created: ${uri.fsPath}`);
       await this.indexSqlFile(uri);
       this.buildReverseIndex();
-      this.resolveSchemas();
+      await this.resolveSchemas();
     });
     this.watcher.onDidDelete((uri) => {
       this.outputChannel.appendLine(`File deleted: ${uri.fsPath}`);
@@ -236,6 +233,7 @@ export class DltModelIndexer {
       await this.indexYmlFile(uri);
       // Re-index SQL files to pick up new metadata
       await this.buildIndex();
+      await this.resolveSchemas();
     });
     this.ymlWatcher.onDidCreate(async (uri) => {
       await this.indexYmlFile(uri);

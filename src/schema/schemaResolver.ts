@@ -24,8 +24,9 @@ export class SchemaResolver {
   /**
    * Resolve schemas for all models.
    * Must be called after the index is fully built.
+   * Yields to the event loop every 50 models to avoid blocking VS Code.
    */
-  resolveAll(models: IndexedModel[]): void {
+  async resolveAll(models: IndexedModel[]): Promise<void> {
     // Reset all resolution statuses
     for (const model of models) {
       model.resolutionStatus = "pending";
@@ -41,7 +42,13 @@ export class SchemaResolver {
     let resolved = 0;
     let errors = 0;
 
-    for (const model of sorted) {
+    for (let i = 0; i < sorted.length; i++) {
+      // Yield to event loop every 50 models to avoid blocking VS Code
+      if (i > 0 && i % 50 === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+
+      const model = sorted[i];
       try {
         this.resolveModel(model);
         if (model.resolutionStatus === "resolved") resolved++;

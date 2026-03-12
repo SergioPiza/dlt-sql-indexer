@@ -19,7 +19,7 @@ export async function activate(
   // Create the indexer
   indexer = new DltModelIndexer(outputChannel);
 
-  // Build initial index
+  // Build initial index (file scanning only — schema resolution runs in background)
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -30,6 +30,12 @@ export async function activate(
       await indexer.buildIndex();
     }
   );
+
+  // Resolve column schemas in the background so activate() returns immediately.
+  // With 1000+ models this is slow; running it async prevents "activating..." hang.
+  indexer.resolveSchemas().catch((err) => {
+    outputChannel.appendLine(`[Schema] Background resolution error: ${err}`);
+  });
 
   // Show status
   const statusBar = vscode.window.createStatusBarItem(
@@ -103,6 +109,10 @@ export async function activate(
             vscode.window.showInformationMessage(
               `DLT SQL Indexer: Indexed ${indexer.modelCount} models`
             );
+            // Resolve schemas in background after rebuild
+            indexer.resolveSchemas().catch((err) => {
+              outputChannel.appendLine(`[Schema] Rebuild resolution error: ${err}`);
+            });
           }
         );
       }

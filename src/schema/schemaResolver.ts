@@ -102,6 +102,14 @@ export class SchemaResolver {
       }
     }
 
+    // Store per-CTE resolved columns on the model for diagnostics
+    if (cteScopes.size > 0) {
+      model.resolvedCteColumns = new Map();
+      for (const [cteName, scope] of cteScopes) {
+        model.resolvedCteColumns.set(cteName, scope.columns);
+      }
+    }
+
     // Resolve the final SELECT body
     if (model.rawSelectBody) {
       const finalColumns = this.resolveSelectBody(
@@ -110,6 +118,17 @@ export class SchemaResolver {
         cteScopes
       );
       model.resolvedColumns = finalColumns;
+    }
+
+    // Ensure all final columns have a source (default to this model's name).
+    // Columns from external tables (non-LIVE, non-dbt) won't have source set
+    // by resolveSelectItemColumn, so we fill it in here.
+    if (model.resolvedColumns) {
+      for (const col of model.resolvedColumns) {
+        if (!col.source) {
+          col.source = model.name;
+        }
+      }
     }
 
     model.resolutionStatus = "resolved";

@@ -10,35 +10,89 @@ import { RawCteBlock, FromSource } from "./types";
 export function extractCteBlocks(content: string): {
   ctes: RawCteBlock[];
   finalSelectBody: string;
+  finalSelectStartLine?: number;
 } {
   const ctes: RawCteBlock[] = [];
 
   // Find the innermost body: content inside the CREATE ... AS (...)
   const innerBody = extractInnerBody(content);
   if (!innerBody.body) {
-    return { ctes: [], finalSelectBody: content };
+    return { ctes: [], finalSelectBody: content, finalSelectStartLine: 0 };
   }
 
   const body = innerBody.body;
   const bodyStartLine = innerBody.startLine;
 
-  // Check if there's a WITH keyword
-  const withMatch = body.match(/^\s*WITH\s/i);
+  // Find the WITH keyword, skipping whitespace, line comments (--), and block comments (/* */)
+  let withPos = 0;
+  let withStartLine = bodyStartLine;
+  {
+    let p = 0;
+    while (p < body.length) {
+      // Skip whitespace
+      if (/\s/.test(body[p])) {
+        if (body[p] === "\n") withStartLine++;
+        p++;
+        continue;
+      }
+      // Skip line comments
+      if (p < body.length - 1 && body[p] === "-" && body[p + 1] === "-") {
+        while (p < body.length && body[p] !== "\n") p++;
+        continue;
+      }
+      // Skip block comments
+      if (p < body.length - 1 && body[p] === "/" && body[p + 1] === "*") {
+        p += 2;
+        while (p < body.length - 1 && !(body[p] === "*" && body[p + 1] === "/")) {
+          if (body[p] === "\n") withStartLine++;
+          p++;
+        }
+        if (p < body.length - 1) p += 2; // skip */
+        continue;
+      }
+      break;
+    }
+    withPos = p;
+  }
+
+  const afterPreamble = body.substring(withPos);
+  const withMatch = afterPreamble.match(/^WITH\s/i);
   if (!withMatch) {
     // No CTEs, the whole body is the final SELECT
-    return { ctes: [], finalSelectBody: body };
+    return { ctes: [], finalSelectBody: body, finalSelectStartLine: bodyStartLine };
   }
 
   // Parse CTE blocks: "name AS (" ... balanced parens ... ")"
-  let pos = withMatch.index! + withMatch[0].length;
+  let pos = withPos + withMatch[0].length;
   const lines = content.substring(0, innerBody.startOffset).split("\n");
-  let currentLine = bodyStartLine;
+  let currentLine = withStartLine;
 
   while (pos < body.length) {
-    // Skip whitespace and commas
-    while (pos < body.length && /[\s,]/.test(body[pos])) {
-      if (body[pos] === "\n") currentLine++;
-      pos++;
+    // Skip whitespace, commas, line comments (-- ...), and block comments (/* ... */)
+    let skipped = true;
+    while (skipped) {
+      skipped = false;
+      // Skip whitespace and commas
+      while (pos < body.length && /[\s,]/.test(body[pos])) {
+        if (body[pos] === "\n") currentLine++;
+        pos++;
+        skipped = true;
+      }
+      // Skip line comments
+      if (pos < body.length - 1 && body[pos] === "-" && body[pos + 1] === "-") {
+        while (pos < body.length && body[pos] !== "\n") pos++;
+        skipped = true;
+      }
+      // Skip block comments
+      if (pos < body.length - 1 && body[pos] === "/" && body[pos + 1] === "*") {
+        pos += 2;
+        while (pos < body.length - 1 && !(body[pos] === "*" && body[pos + 1] === "/")) {
+          if (body[pos] === "\n") currentLine++;
+          pos++;
+        }
+        if (pos < body.length - 1) pos += 2; // skip */
+        skipped = true;
+      }
     }
 
     // Try to match "name AS ("
@@ -65,7 +119,7 @@ export function extractCteBlocks(content: string): {
       // Unbalanced parens — take the rest as this CTE's body
       const cteBody = body.substring(openParenOffset + 1);
       ctes.push({ name: cteName, body: cteBody, startLine: cteStartLine });
-      return { ctes, finalSelectBody: "" };
+      return { ctes, finalSelectBody: "", finalSelectStartLine: currentLine };
     }
 
     const cteBody = body.substring(openParenOffset + 1, closeParenOffset);
@@ -83,12 +137,13 @@ export function extractCteBlocks(content: string): {
 
   // Everything after the last CTE is the final SELECT body
   const finalBody = body.substring(pos).trim();
-  return { ctes, finalSelectBody: finalBody };
+  return { ctes, finalSelectBody: finalBody, finalSelectStartLine: currentLine };
 }
 
 /**
  * Extract the inner body of a CREATE statement.
  * For "CREATE ... AS (...body...)", returns the body inside the outer parens.
+ * For "CREATE ... TABLE name (...body...)" (no AS), also handles the parens.
  * For models without parens after AS, returns the body after AS.
  */
 function extractInnerBody(content: string): {
@@ -102,6 +157,22 @@ function extractInnerBody(content: string): {
   );
   if (asMatch) {
     const openParen = asMatch.index! + asMatch[0].length - 1;
+    const closeParen = findMatchingParen(content, openParen);
+    const body =
+      closeParen >= 0
+        ? content.substring(openParen + 1, closeParen)
+        : content.substring(openParen + 1);
+
+    const startLine = content.substring(0, openParen + 1).split("\n").length - 1;
+    return { body, startLine, startOffset: openParen + 1 };
+  }
+
+  // Handle "CREATE ... TABLE|VIEW name (" without AS keyword
+  const createParenMatch = content.match(
+    /\b(?:CREATE|REFRESH)\b[^(]*?\b(?:TABLE|VIEW)\s+\w+\s*\(/i
+  );
+  if (createParenMatch) {
+    const openParen = createParenMatch.index! + createParenMatch[0].length - 1;
     const closeParen = findMatchingParen(content, openParen);
     const body =
       closeParen >= 0
@@ -129,15 +200,24 @@ function extractInnerBody(content: string): {
 
 /**
  * Find the matching closing parenthesis for an opening paren.
- * Respects string literals (single quotes) and line comments (--).
+ * Respects string literals (single quotes), line comments (--), and block comments.
  */
 function findMatchingParen(text: string, openIndex: number): number {
   let depth = 1;
   let inSingleQuote = false;
   let inLineComment = false;
+  let inBlockComment = false;
 
   for (let i = openIndex + 1; i < text.length; i++) {
     const ch = text[i];
+
+    if (inBlockComment) {
+      if (ch === "*" && text[i + 1] === "/") {
+        inBlockComment = false;
+        i++; // skip the '/'
+      }
+      continue;
+    }
 
     if (ch === "\n") {
       inLineComment = false;
@@ -158,6 +238,11 @@ function findMatchingParen(text: string, openIndex: number): number {
       inLineComment = true;
       continue;
     }
+    if (ch === "/" && text[i + 1] === "*") {
+      inBlockComment = true;
+      i++; // skip the '*'
+      continue;
+    }
     if (ch === "'") {
       inSingleQuote = true;
       continue;
@@ -174,14 +259,103 @@ function findMatchingParen(text: string, openIndex: number): number {
 }
 
 /**
+ * Split a SQL body on top-level UNION ALL / UNION keywords.
+ * Returns individual SELECT segments. If no UNION is found, returns the whole body.
+ */
+export function splitUnionAll(body: string): { segment: string; lineOffset: number }[] {
+  const segments: { segment: string; lineOffset: number }[] = [];
+  let depth = 0;
+  let inSingleQuote = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let start = 0;
+  let currentLine = 0;
+  let segmentStartLine = 0;
+
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+
+    if (inBlockComment) {
+      if (ch === "\n") { currentLine++; continue; }
+      if (ch === "*" && body[i + 1] === "/") {
+        inBlockComment = false;
+        i++; // skip the '/'
+      }
+      continue;
+    }
+
+    if (ch === "\n") {
+      currentLine++;
+      inLineComment = false;
+      continue;
+    }
+    if (inLineComment) continue;
+
+    if (inSingleQuote) {
+      if (ch === "'" && body[i + 1] === "'") {
+        i++; // skip escaped quote
+      } else if (ch === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (ch === "-" && body[i + 1] === "-") {
+      inLineComment = true;
+      continue;
+    }
+    if (ch === "/" && body[i + 1] === "*") {
+      inBlockComment = true;
+      i++; // skip the '*'
+      continue;
+    }
+    if (ch === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+    if (ch === "(") { depth++; continue; }
+    if (ch === ")") { depth--; continue; }
+
+    if (depth > 0) continue;
+
+    // Check for UNION [ALL] at depth 0
+    const remaining = body.substring(i);
+    const unionMatch = remaining.match(/^UNION\s+ALL\b/i) || remaining.match(/^UNION\b(?!\s+ALL)/i);
+    if (unionMatch) {
+      // Ensure it's a word boundary (not part of a larger word)
+      const before = i > 0 ? body[i - 1] : " ";
+      if (/\s/.test(before)) {
+        segments.push({ segment: body.substring(start, i), lineOffset: segmentStartLine });
+        i += unionMatch[0].length - 1; // -1 because the for loop increments
+        start = i + 1;
+        // Count newlines in the UNION keyword
+        for (const c of unionMatch[0]) {
+          if (c === "\n") currentLine++;
+        }
+        segmentStartLine = currentLine;
+      }
+    }
+  }
+
+  // Last segment
+  const lastSeg = body.substring(start);
+  if (lastSeg.trim()) {
+    segments.push({ segment: lastSeg, lineOffset: segmentStartLine });
+  }
+
+  return segments.length > 0 ? segments : [{ segment: body, lineOffset: 0 }];
+}
+
+/**
  * Parse the FROM/JOIN clause of a SELECT body to find source tables/CTEs and their aliases.
  * Only parses the top-level FROM/JOIN (depth 0 — not inside subqueries).
  */
 export function parseFromClause(selectBody: string): FromSource[] {
   const sources: FromSource[] = [];
 
-  // Normalize: strip comments, collapse whitespace
+  // Normalize: strip comments (block and line), collapse whitespace
   const cleaned = selectBody
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/--[^\n]*/g, "")
     .replace(/\s+/g, " ")
     .trim();

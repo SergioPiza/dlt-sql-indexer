@@ -4,6 +4,7 @@ import { DltDefinitionProvider } from "./providers/definitionProvider";
 import { DltCompletionProvider } from "./providers/completionProvider";
 import { DltHoverProvider } from "./providers/hoverProvider";
 import { DltReferenceProvider } from "./providers/referenceProvider";
+import { DltRenameProvider } from "./providers/renameProvider";
 import { DltModelTreeProvider } from "./views/modelTreeProvider";
 import { DltDiagnosticProvider } from "./diagnostics/diagnosticProvider";
 
@@ -41,11 +42,15 @@ export async function activate(
   statusBar.show();
   context.subscriptions.push(statusBar);
 
-  // SQL language selector
-  const sqlSelector: vscode.DocumentSelector = {
-    language: "sql",
-    scheme: "file",
-  };
+  // SQL language selector — cover language IDs set by dbt/sqlfluff extensions
+  const sqlSelector: vscode.DocumentSelector = [
+    { language: "sql", scheme: "file" },
+    { language: "jinja-sql", scheme: "file" },
+    { language: "sql-bigquery", scheme: "file" },
+    { language: "sql-databricks", scheme: "file" },
+    { language: "databricks-sql", scheme: "file" },
+    { pattern: "**/*.sql", scheme: "file" },
+  ];
 
   // Register providers
   context.subscriptions.push(
@@ -65,6 +70,10 @@ export async function activate(
     vscode.languages.registerReferenceProvider(
       sqlSelector,
       new DltReferenceProvider(indexer)
+    ),
+    vscode.languages.registerRenameProvider(
+      sqlSelector,
+      new DltRenameProvider(indexer)
     )
   );
 
@@ -173,7 +182,8 @@ export async function activate(
 
   const diagnosticProvider = new DltDiagnosticProvider(
     diagnosticCollection,
-    indexer
+    indexer,
+    outputChannel
   );
 
   // Validate open documents
@@ -181,13 +191,16 @@ export async function activate(
     diagnosticProvider.validateDocument(doc);
   }
 
-  // Validate on open and save
+  // Validate on open, save, and while typing (debounced)
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((doc) => {
       diagnosticProvider.validateDocument(doc);
     }),
     vscode.workspace.onDidSaveTextDocument((doc) => {
       diagnosticProvider.validateDocument(doc);
+    }),
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      diagnosticProvider.validateDocumentDebounced(e.document);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => {
       diagnosticProvider.clearDiagnostics(doc.uri);

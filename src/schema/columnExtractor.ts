@@ -130,11 +130,11 @@ function extractAlias(text: string): {
     const ch = text[i];
 
     if (inSingleQuote) {
-      if (ch === "'" && text[i - 1] !== "\\") inSingleQuote = false;
+      if (ch === "'" && text[i + 1] === "'") { i++; } else if (ch === "'") inSingleQuote = false;
       continue;
     }
     if (inDoubleQuote) {
-      if (ch === '"' && text[i - 1] !== "\\") inDoubleQuote = false;
+      if (ch === '"' && text[i + 1] === '"') { i++; } else if (ch === '"') inDoubleQuote = false;
       continue;
     }
     if (inBacktick) {
@@ -211,11 +211,11 @@ function splitAtTopLevelCommas(
     if (inLineComment) continue;
 
     if (inSingleQuote) {
-      if (ch === "'" && text[i - 1] !== "\\") inSingleQuote = false;
+      if (ch === "'" && text[i + 1] === "'") { i++; } else if (ch === "'") inSingleQuote = false;
       continue;
     }
     if (inDoubleQuote) {
-      if (ch === '"' && text[i - 1] !== "\\") inDoubleQuote = false;
+      if (ch === '"' && text[i + 1] === '"') { i++; } else if (ch === '"') inDoubleQuote = false;
       continue;
     }
     if (inBacktick) {
@@ -254,7 +254,57 @@ function splitAtTopLevelCommas(
     segments.push({ text: remaining, lineOffset: segmentStartLine });
   }
 
-  return segments;
+  // Strip inline comments from each segment's text
+  return segments.map((seg) => ({
+    ...seg,
+    text: stripInlineComments(seg.text),
+  }));
+}
+
+/**
+ * Strip inline SQL comments (-- ...) from text while respecting quotes.
+ * Processes line-by-line: for each line, removes the `-- ...` portion
+ * if the `--` is not inside a string literal.
+ */
+function stripInlineComments(text: string): string {
+  const lines = text.split("\n");
+  const result: string[] = [];
+
+  for (const line of lines) {
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let inBacktick = false;
+    let cutAt = -1;
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+
+      if (inSingleQuote) {
+        if (ch === "'" && line[i + 1] === "'") { i++; } else if (ch === "'") inSingleQuote = false;
+        continue;
+      }
+      if (inDoubleQuote) {
+        if (ch === '"' && line[i + 1] === '"') { i++; } else if (ch === '"') inDoubleQuote = false;
+        continue;
+      }
+      if (inBacktick) {
+        if (ch === "`") inBacktick = false;
+        continue;
+      }
+
+      if (ch === "'") { inSingleQuote = true; }
+      else if (ch === '"') { inDoubleQuote = true; }
+      else if (ch === "`") { inBacktick = true; }
+      else if (ch === "-" && line[i + 1] === "-") {
+        cutAt = i;
+        break;
+      }
+    }
+
+    result.push(cutAt >= 0 ? line.substring(0, cutAt) : line);
+  }
+
+  return result.join("\n");
 }
 
 /**
@@ -266,10 +316,19 @@ function findTopLevelKeyword(text: string, keyword: string): number {
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let inLineComment = false;
+  let inBlockComment = false;
   const upper = keyword.toUpperCase();
 
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
+
+    if (inBlockComment) {
+      if (ch === "*" && text[i + 1] === "/") {
+        inBlockComment = false;
+        i++; // skip '/'
+      }
+      continue;
+    }
 
     if (ch === "\n") {
       inLineComment = false;
@@ -278,16 +337,21 @@ function findTopLevelKeyword(text: string, keyword: string): number {
     if (inLineComment) continue;
 
     if (inSingleQuote) {
-      if (ch === "'" && text[i - 1] !== "\\") inSingleQuote = false;
+      if (ch === "'" && text[i + 1] === "'") { i++; } else if (ch === "'") inSingleQuote = false;
       continue;
     }
     if (inDoubleQuote) {
-      if (ch === '"' && text[i - 1] !== "\\") inDoubleQuote = false;
+      if (ch === '"' && text[i + 1] === '"') { i++; } else if (ch === '"') inDoubleQuote = false;
       continue;
     }
 
     if (ch === "-" && text[i + 1] === "-") {
       inLineComment = true;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      inBlockComment = true;
+      i++; // skip '*'
       continue;
     }
     if (ch === "'") {

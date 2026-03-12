@@ -12,7 +12,9 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:**/models/**/*.sql"
+    "workspaceContains:**/models/**/*.sql",
+    "onLanguage:sql",
+    "onLanguage:jinja-sql"
   ],
   "main": "./out/extension.js",
   "contributes": {

@@ -10,6 +10,7 @@ export class DltModelIndexer {
     models: new Map(),
     referencedBy: new Map(),
     fileToModel: new Map(),
+    modelFiles: new Map(),
   };
 
   private outputChannel: vscode.OutputChannel;
@@ -35,6 +36,7 @@ export class DltModelIndexer {
       models: new Map(),
       referencedBy: new Map(),
       fileToModel: new Map(),
+      modelFiles: new Map(),
     };
 
     const modelsGlob = this.getModelsGlob();
@@ -117,6 +119,12 @@ export class DltModelIndexer {
       const key = result.modelName.toLowerCase();
       this.index.models.set(key, model);
       this.index.fileToModel.set(uri.fsPath, key);
+
+      // Track all files that define this model name (for duplicate detection)
+      if (!this.index.modelFiles.has(key)) {
+        this.index.modelFiles.set(key, new Set());
+      }
+      this.index.modelFiles.get(key)!.add(uri.fsPath);
     } catch (err) {
       this.outputChannel.appendLine(
         `Error indexing ${uri.fsPath}: ${err}`
@@ -211,6 +219,14 @@ export class DltModelIndexer {
       if (key) {
         this.index.models.delete(key);
         this.index.fileToModel.delete(uri.fsPath);
+        // Remove from modelFiles duplicate tracking
+        const files = this.index.modelFiles.get(key);
+        if (files) {
+          files.delete(uri.fsPath);
+          if (files.size === 0) {
+            this.index.modelFiles.delete(key);
+          }
+        }
         this.buildReverseIndex();
       }
     });
@@ -280,5 +296,21 @@ export class DltModelIndexer {
   /** Get the total number of indexed models */
   get modelCount(): number {
     return this.index.models.size;
+  }
+
+  /** Get all file paths that define a model name (for duplicate detection) */
+  getDuplicateFiles(modelName: string): string[] {
+    const files = this.index.modelFiles.get(modelName.toLowerCase());
+    if (!files || files.size <= 1) return [];
+    return Array.from(files);
+  }
+
+  /** Get all model names that have duplicates */
+  getAllDuplicateNames(): string[] {
+    const dupes: string[] = [];
+    for (const [name, files] of this.index.modelFiles) {
+      if (files.size > 1) dupes.push(name);
+    }
+    return dupes;
   }
 }

@@ -85,6 +85,8 @@ export interface IndexedModel {
   resolvedColumns?: ResolvedColumn[];
   /** Resolution status for cycle detection */
   resolutionStatus?: "pending" | "resolving" | "resolved" | "error";
+  /** Per-CTE resolved columns (populated by SchemaResolver) — keyed by CTE name (lowercase) */
+  resolvedCteColumns?: Map<string, ResolvedColumn[]>;
   /** Raw CTE blocks for schema resolution (populated by parser) */
   rawCteBlocks?: RawCteBlock[];
   /** Raw final SELECT body for schema resolution (populated by parser) */
@@ -99,4 +101,6 @@ export interface ModelIndex {
   referencedBy: Map<string, Set<string>>;
   /** File path to model name mapping */
   fileToModel: Map<string, string>;
+  /** All file paths that define each model name (lowercase) — for duplicate detection */
+  modelFiles: Map<string, Set<string>>;
 }

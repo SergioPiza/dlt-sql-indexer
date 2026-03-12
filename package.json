@@ -3,7 +3,12 @@
   "displayName": "DLT SQL Indexer",
   "description": "Index and navigate Databricks DLT SQL models — go-to-definition, autocomplete, hover info, and dependency tree.",
   "version": "0.1.0",
-  "publisher": "clara-team",
+  "publisher": "SergioPiza",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SergioPiza/dlt-sql-indexer.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
